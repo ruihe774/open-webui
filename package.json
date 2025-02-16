@@ -91,6 +91,8 @@
 		"jspdf": "^3.0.0",
 		"katex": "^0.16.21",
 		"kokoro-js": "^1.1.1",
+		"markdown-it": "^14.1.0",
+		"markdown-it-v": "npm:@ruihe774/markdown-it-v@^3.1.0",
 		"marked": "^9.1.0",
 		"mermaid": "^10.9.3",
 		"paneforge": "^0.0.6",

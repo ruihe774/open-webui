@@ -309,7 +309,7 @@ export const formatDate = (inputDate) => {
 	}
 };
 
-export const copyToClipboard = async (text) => {
+export const copyToClipboard = async (text: string, html?: string) => {
 	let result = false;
 	if (!navigator.clipboard) {
 		const textArea = document.createElement('textarea');
@@ -337,8 +337,14 @@ export const copyToClipboard = async (text) => {
 		return result;
 	}
 
+	const item: Record<string, Blob> = {
+		'text/plain': new Blob([new TextEncoder().encode(text)], { type: 'text/plain' })
+	};
+	if (html) {
+		item['text/html'] = new Blob([new TextEncoder().encode(html)], { type: 'text/html' });
+	}
 	result = await navigator.clipboard
-		.writeText(text)
+		.write([new ClipboardItem(item)])
 		.then(() => {
 			console.log('Async: Copying to clipboard was successful!');
 			return true;

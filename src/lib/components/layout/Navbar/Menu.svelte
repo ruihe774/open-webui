@@ -9,6 +9,10 @@
 	import jsPDF from 'jspdf';
 	import html2canvas from 'html2canvas-pro';
 
+	import MarkdownIt from "markdown-it";
+	import MarkdownItVPlugin from "markdown-it-v";
+	import type { MarkdownItV, StreamDom } from "markdown-it-v";
+
 	import { downloadChatAsPDF } from '$lib/apis/utils';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 
@@ -32,6 +36,9 @@
 
 	const i18n = getContext('i18n');
 
+	type VirtualNode = StreamDom["currentNode"];
+	const md = MarkdownIt().use(MarkdownItVPlugin) as unknown as MarkdownItV;
+
 	export let shareEnabled: boolean = false;
 	export let shareHandler: Function;
 	export let downloadHandler: Function;
@@ -41,7 +48,7 @@
 	export let chat;
 	export let onClose: Function = () => {};
 
-	const getChatAsText = async () => {
+	const getChatAsText = () => {
 		const history = chat.chat.history;
 		const messages = createMessagesList(history, history.currentId);
 		const chatText = messages.reduce((a, message, i, arr) => {
@@ -51,8 +58,14 @@
 		return chatText.trim();
 	};
 
+	const getChatAsHTML = () => {
+		const history = chat.chat.history;
+		const messages = createMessagesList(history, history.currentId);
+		return messagesToHTML(messages)
+	}
+
 	const downloadTxt = async () => {
-		const chatText = await getChatAsText();
+		const chatText = getChatAsText();
 
 		let blob = new Blob([chatText], {
 			type: 'text/plain'
@@ -150,6 +163,196 @@
 			saveAs(blob, `chat-export-${Date.now()}.json`);
 		}
 	};
+
+	const copyChatToClipboard = async () => {
+		return await copyToClipboard(getChatAsText(), getChatAsHTML())
+	}
+
+	function messagesToHTML(messages: {
+		content: string;
+		role: "user" | "assistant";
+	}[]) {
+		let html = "";
+		html += "<article>";
+		messages.forEach(({ content, role }) => {
+			let responseStart = 0;
+			if (role == "user") {
+				html += "<section>";
+				const questionContent = content;
+				const questionDOM = md.render(questionContent);
+				collapseSpace(questionDOM);
+				html += `<div style="font-style:italic">${questionDOM.toHTML()}</div>`;
+			} else if (role == "assistant") {
+				html += "<div>";
+				if (content.startsWith("<details")) {
+					const thinkStart = content.search(/<\/summary>$/m) + 11;
+					const thinkEnd = content.search(/^<\/details>/m) - 1;
+					responseStart = thinkEnd + 14;
+					const thinkContent = content.slice(thinkStart, thinkEnd).replaceAll(
+						/^> /gm,
+						"",
+					);
+					const thinkDOM = md.render(thinkContent);
+					collapseSpace(thinkDOM);
+					html += `<blockquote>${thinkDOM.toHTML()}</blockquote>`;
+				}
+				const responseContent = content.slice(responseStart);
+				const responseDOM = md.render(responseContent);
+				collapseSpace(responseDOM);
+				removeHr(responseDOM);
+				html += `<div>${responseDOM.toHTML()}</div>`;
+				html += "</div>";
+				html += "</section><hr>";
+			} else {
+				console.warn(`unknown role ${role}`);
+			}
+		});
+		html = (html.endsWith("<hr>") ? html.slice(0, -4) : html) + "</article>";
+		return html;
+	}
+
+	function removeHr(sdom: StreamDom) {
+		const leaves = Array.from(collectLeafNodes(sdom.currentNode));
+		for (const [i, current] of leaves.entries()) {
+			if (current.type == "virtual" && current.node.tagName == "hr") {
+				const parent = current.node.parent!;
+				parent.children[parent.children.indexOf(current.node)] = "";
+				const next = leaves[i + 1];
+				if (
+					next && next.type == "text" && next.parent === parent &&
+					next.value == "\n"
+				) {
+					parent.children[next.index] = "";
+				}
+			}
+		}
+	}
+
+	function collapseSpace(sdom: StreamDom) {
+		const leaves = Array.from(collectLeafNodes(sdom.currentNode));
+		for (const [i, current] of leaves.entries()) {
+			const next = leaves[i + 1];
+			if (next && current.type == "text" && next.type == "text") {
+				processTextPair(current, next);
+			}
+		}
+	}
+
+	function* collectLeafNodes(
+		node: VirtualNode | string,
+		index: number = 0,
+		parent?: VirtualNode,
+	): Iterable<
+		{
+			type: "text";
+			parent: VirtualNode | undefined;
+			index: number;
+			value: string;
+		} | { type: "virtual"; node: VirtualNode }
+	> {
+		if (typeof node == "string") {
+			yield { type: "text", parent, index, value: node };
+		} else if (node.children.length == 0) {
+			yield { type: "virtual", node };
+		} else {
+			for (const [index, child] of node.children.entries()) {
+				yield* collectLeafNodes(child, index, node);
+			}
+		}
+	}
+
+	function processTextPair<
+		T extends { parent: VirtualNode | undefined; index: number; value: string },
+	>(prevNode: T, nextNode: T) {
+		const prevText = [...prevNode.value];
+		const nextText = [...nextNode.value];
+
+		const lastNonSpaceIndex = prevText.findLastIndex((char) => char != " ");
+		const lastNonSpace = prevText[lastNonSpaceIndex];
+		const firstNonSpaceIndex = nextText.findIndex((char) => char != " ");
+		const firstNonSpace = nextText[firstNonSpaceIndex];
+		if (
+			firstNonSpace && lastNonSpace &&
+			((isIdeograph(lastNonSpace) || isFullwidthPunct(lastNonSpace)) &&
+				(isIdeograph(firstNonSpace) || isNonIdeographicLetter(firstNonSpace) ||
+					isNonIdeographicNumeral(firstNonSpace) ||
+					isFullwidthPunct(firstNonSpace) || maybeCJKPunct(firstNonSpace)) ||
+				(isIdeograph(firstNonSpace) || isFullwidthPunct(firstNonSpace)) &&
+				(isIdeograph(lastNonSpace) || isNonIdeographicLetter(lastNonSpace) ||
+					isNonIdeographicNumeral(lastNonSpace) ||
+					isFullwidthPunct(lastNonSpace) || maybeCJKPunct(lastNonSpace)))
+		) {
+			prevText.splice(lastNonSpaceIndex + 1);
+			nextText.splice(0, firstNonSpaceIndex);
+			const newPrev = prevText.join("");
+			prevNode.parent!.children[prevNode.index] = newPrev;
+			const newNext = nextText.join("");
+			nextNode.parent!.children[nextNode.index] = newNext;
+		}
+	}
+
+	function isIdeograph(char: string) {
+		const codePoint = char.codePointAt(0)!;
+		return codePoint >= 0x3041 && codePoint <= 0x30FF && !/\p{P}/u.test(char) ||
+			codePoint >= 0x31C0 && codePoint <= 0x31EF ||
+			codePoint >= 0x31F0 && codePoint <= 0x31FF || /\p{Script=Han}/u.test(char);
+	}
+
+	function isEastAsianFullwidth(char: string) {
+		const cp = char.codePointAt(0)!;
+		return (
+			(cp >= 0xFF00 && cp <= 0xFFEF) ||
+			(cp >= 0x3000 && cp <= 0x3002) ||
+			(cp >= 0xFE30 && cp <= 0xFE4F)
+		);
+	}
+
+	function isNonIdeographicLetter(char: string) {
+		return /\p{L}|\p{M}/u.test(char) && !isIdeograph(char) &&
+			!isEastAsianFullwidth(char);
+	}
+
+	function isNonIdeographicNumeral(char: string) {
+		return /\p{Nd}/u.test(char) && !isEastAsianFullwidth(char);
+	}
+
+	function isFullwidthOpeningPunct(char: string) {
+		const cp = char.codePointAt(0)!;
+		return /\p{Ps}/u.test(char) &&
+			(cp >= 0x3000 && cp <= 0x303F || isEastAsianFullwidth(char) ||
+				cp == 0x2018 || cp == 0x201C);
+	}
+
+	function isFullwidthClosingPunct(char: string) {
+		const cp = char.codePointAt(0)!;
+		return /\p{Pe}/u.test(char) &&
+			(cp >= 0x3000 && cp <= 0x303F || isEastAsianFullwidth(char) ||
+				cp == 0x2019 || cp == 0x201D);
+	}
+
+	function isFullwidthOtherPunct(char: string) {
+		const cp = char.codePointAt(0)!;
+		return [
+			0x00B7,
+			0x2027,
+			0x30FB,
+			0xFF1A,
+			0xFF1B,
+			0x3001,
+			0x3002,
+			0xFF0C,
+			0xFF0E,
+		].includes(cp);
+	}
+
+	function isFullwidthPunct(char: string) {
+		return isFullwidthOpeningPunct(char) || isFullwidthClosingPunct(char) ||
+			isFullwidthOtherPunct(char);
+	}
+
+	function maybeCJKPunct(char: string) {
+		return char == "“" || char == "”" || char == "—";
+	}
 </script>
 
 <Dropdown
@@ -320,11 +523,7 @@
 				class="flex gap-2 items-center px-3 py-2 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-md"
 				id="chat-copy-button"
 				on:click={async () => {
-					const res = await copyToClipboard(await getChatAsText()).catch((e) => {
-						console.error(e);
-					});
-
-					if (res) {
+					if (await copyChatToClipboard()) {
 						toast.success($i18n.t('Copied to clipboard'));
 					}
 				}}
