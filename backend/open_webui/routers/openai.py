@@ -776,7 +776,7 @@ async def generate_chat_completion(
     key = request.app.state.config.OPENAI_API_KEYS[idx]
 
     # Check if model is from "o" series
-    is_o_series = payload["model"].lower().startswith(("o1", "o3", "o4"))
+    is_o_series = payload["model"].split("/")[-1].lower().startswith(("o1", "o3", "o4"))
     if is_o_series:
         payload = openai_o_series_handler(payload)
     elif "api.openai.com" not in url:
