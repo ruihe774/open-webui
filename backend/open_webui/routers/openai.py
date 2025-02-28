@@ -114,6 +114,26 @@ def openai_o1_o3_handler(payload):
     return payload
 
 
+def openrouter_reasoning_handler(payload):
+    """
+    Handle openrouter reasoning parameter
+    """
+    if "reasoning_effort" in payload:
+        effort = payload["reasoning_effort"]
+        try:
+            payload["reasoning"] = {
+                "max_tokens": int(effort),
+                "exclude": False
+            }
+        except ValueError:
+            payload["reasoning"] = {
+                "effort": effort,
+                "exclude": False
+            }
+        del payload["reasoning_effort"]
+    return payload
+
+
 ##########################################
 #
 # API routes
@@ -675,6 +695,9 @@ async def generate_chat_completion(
         if "max_completion_tokens" in payload:
             payload["max_tokens"] = payload["max_completion_tokens"]
             del payload["max_completion_tokens"]
+    # openrouter reasoning parameter
+    if "openrouter.ai" in url:
+        payload = openrouter_reasoning_handler(payload)
 
     if "max_tokens" in payload and "max_completion_tokens" in payload:
         del payload["max_tokens"]
